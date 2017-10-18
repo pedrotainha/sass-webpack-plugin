@@ -1,6 +1,5 @@
 import sass from 'node-sass';
 import path from 'path';
-import Audit from './audit';
 
 const MARK = 'sass-webpack-plugin';
 
@@ -17,19 +16,20 @@ function toAsset(result) {
 }
 
 function wrapError(err) {
-  var header = MARK;
-  if(err.file && err.line) {
+  let header = MARK;
+  if (err.file && err.line) {
     header = `${header} ${err.file}:${err.line}`;
   }
   return new Error(`${header}\n\n${err.message}\n`);
 }
 
 class SassPlugin {
-  constructor(file, mode, custom) {
-    var options = {};
+  constructor(files, pluginOptions, nodeSassoptions) {
+    let sassOptions = {};
+    const mode = pluginOptions.env;
 
-    if(mode === 'development' || mode === undefined) {
-      options = {
+    if (mode === 'development' || mode === undefined) {
+      sassOptions = {
         indentedSyntax: true,
         indentWidth: 2,
         sourceMap: true,
@@ -37,59 +37,55 @@ class SassPlugin {
         sourceComments: true,
         sourceMapContents: true
       };
-    } else if(mode === 'production') {
-      options = { outputStyle: 'compressed' };
-    } else if(typeof mode === 'object') {
-      options = mode;
+    } else if (mode === 'production') {
+      sassOptions = {
+        outputStyle: 'compressed'
+      };
     }
 
-    if(typeof custom === 'object') {
-      options = Object.assign(options, custom);
+    if (typeof nodeSassoptions === 'object') {
+      sassOptions = Object.assign(sassOptions, nodeSassoptions);
     }
-    options.file = path.resolve(file);
-    this.options = options;
+
+    this.files = files.map((f) => {
+      return {
+        file: path.resolve(f),
+        outFile: pluginOptions.dist + toFilename(f)
+      };
+    });
+
+    this.sassOptions = sassOptions;
   }
 
   apply(compiler) {
-    let options = this.options;
-    let fileName = toFilename(options.file);
-    let audit = new Audit(path.dirname(options.file));
-    let chunk;
-
-    compiler.plugin('compilation', (compilation) => {
-      // skip child compilers
-      if(compilation.compiler !== compiler) return;
-
-      chunk = compilation.addChunk(MARK);
-      chunk.ids = [];
-      if(chunk.files.indexOf(fileName) === -1) chunk.files.push(fileName);
-
-      if(audit.isUpToDay(compilation.fileTimestamps)) return;
-
-      compilation.plugin('additional-assets', (cb) => {
-        sass.render(options, (err, result) => {
-          if(err) {
-            compilation.errors.push(wrapError(err));
-          } else {
-            compilation.assets[options.outFile || fileName] = toAsset(result);
-            audit.track(result.stats);
-          }
-          cb();
-        });
-      });
-    });
 
     compiler.plugin('emit', (compilation, cb) => {
-      let mainModule = compilation.modules[0];
-      chunk.addModule(mainModule);
-      mainModule.addChunk(chunk);
-      compilation.chunks.push(chunk);
-      cb();
-    });
 
-    compiler.plugin('after-emit', (compilation, cb) => {
-      audit.handle(compilation);
-      cb();
+      const analyseFiles = (index) => {
+
+        if (index >= this.files.length) {
+          cb();
+        } else {
+
+          const opt = Object.assign({}, this.sassOptions, {
+            file: this.files[index].file
+          });
+
+          sass.render(opt, (err, result) => {
+            if (err) {
+              compilation.errors.push(wrapError(err));
+            } else {
+              compilation.assets[this.files[index].outFile] = toAsset(result);
+              analyseFiles(index + 1);
+            }
+          });
+
+        }
+      };
+
+      //start
+      analyseFiles(0);
+
     });
   }
 }
